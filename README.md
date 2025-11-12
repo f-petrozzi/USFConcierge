@@ -15,7 +15,9 @@ Streamlit concierge for Admissions/Orientation staff that grounds every answer i
 ### Screenshots
 | Chat + Assistants | Recent Actions Log |
 |-------------------|--------------------|
-| ![Chat UI](docs/screenshots/chat-ui.png) | ![Actions](docs/screenshots/actions.png) |
+|<img width="2027" height="932" alt="image" src="https://github.com/user-attachments/assets/f16f24d9-0292-4639-879b-4bd4ae8cfaa9" />|<img width="2546" height="1149" alt="image" src="https://github.com/user-attachments/assets/5a8c8e4d-c111-4141-ae84-ee74b9f57e8d" />|
+
+
 
 ---
 
