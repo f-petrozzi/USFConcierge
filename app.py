@@ -25,12 +25,6 @@ from agents.mcp import SimpleMCPClient
 from tools.google_tools import GoogleWorkspaceTools
 from utils.streaming import SmoothStreamer
 from utils.ui_helpers import inject_global_styles, scroll_chat_to_bottom
-from utils.session_manager import (
-    get_session_token,
-    get_session_from_token,
-    issue_session_token,
-    revoke_session,
-)
 from utils.state_manager import (
     initialize_session_state,
     handle_pending_action_collapses,
@@ -81,26 +75,13 @@ def recompute_token_total(msgs: list[dict]) -> int:
     )
 
 
-# Handle simple token-based authentication
-# Try to restore session from query parameter
-if not st.session_state.authenticated:
-    session_token = get_session_token()
-    if session_token:
-        session_payload = get_session_from_token(session_token)
-        if session_payload:
-            st.session_state.authenticated = True
-            st.session_state.user_id = session_payload["user_id"]
-            st.session_state.username = session_payload["username"]
-
 # Handle pending login (after user submits login form)
 pending_login = st.session_state.get("pending_login")
 if pending_login:
-    # Issue new session token
     user_id = pending_login.get("user_id")
     username = pending_login.get("username")
-    issue_session_token(user_id, username)
 
-    # Update session state
+    # Update session state (no token persistence - user will need to re-login on refresh)
     st.session_state.authenticated = True
     st.session_state.user_id = user_id
     st.session_state.username = username
@@ -216,77 +197,105 @@ if not st.session_state.authenticated:
 else:
     # Sidebar
     with st.sidebar:
+        # Show processing message at top when processing
+        if st.session_state.is_processing:
+            st.info("⏳ Processing... elements disabled")
+
         st.markdown(f"### 👤 {st.session_state.username}")
 
-        if st.button("🚪 Logout", use_container_width=True):
-            # Revoke session token
-            revoke_session()
-
-            # Clear session state
-            st.session_state.authenticated = False
-            st.session_state.user_id = None
-            st.session_state.username = None
-            st.session_state.current_session_id = None
-            st.session_state.messages = []
-            st.session_state.token_total = 0
-            st.session_state.limit_reached = False
-            st.session_state.show_dashboard = True
-            st.rerun()
-
-        if st.button("🏠 Dashboard", use_container_width=True):
-            st.session_state.current_session_id = None
-            st.session_state.show_dashboard = True
-            st.rerun()
-
-        if st.button("➕ New Chat", use_container_width=True, type="primary"):
-            from datetime import datetime
-            session_name = f"Chat {datetime.now().strftime('%b %d, %H:%M')}"
-            sid = db.create_session(st.session_state.user_id, session_name)
-            if not sid:
-                st.error("Unable to create a new session. Please try again.")
-            else:
-                st.session_state.current_session_id = sid
-                st.session_state.messages = [
-                    {"role": "system", "content": "Assistant configured."}
-                ]
+        # Only render interactive sidebar elements when NOT processing
+        if not st.session_state.is_processing:
+            if st.button("🚪 Logout", use_container_width=True):
+                # Clear session state
+                st.session_state.authenticated = False
+                st.session_state.user_id = None
+                st.session_state.username = None
+                st.session_state.current_session_id = None
+                st.session_state.messages = []
                 st.session_state.token_total = 0
                 st.session_state.limit_reached = False
-                st.session_state.show_dashboard = False
+                st.session_state.show_dashboard = True
                 st.rerun()
 
-        # Search
-        search_query = st.text_input("🔍 Search sessions", key="search_input")
+            if st.button("🏠 Dashboard", use_container_width=True):
+                st.session_state.current_session_id = None
+                st.session_state.show_dashboard = True
+                st.rerun()
 
-        # Filter sessions
-        sessions = db.search_sessions(st.session_state.user_id, search_query)
+            if st.button("➕ New Chat", use_container_width=True, type="primary"):
+                from datetime import datetime
+                session_name = f"Chat {datetime.now().strftime('%b %d, %H:%M')}"
+                sid = db.create_session(st.session_state.user_id, session_name)
+                if not sid:
+                    st.error("Unable to create a new session. Please try again.")
+                else:
+                    st.session_state.current_session_id = sid
+                    st.session_state.messages = [
+                        {"role": "system", "content": "Assistant configured."}
+                    ]
+                    st.session_state.token_total = 0
+                    st.session_state.limit_reached = False
+                    st.session_state.show_dashboard = False
+                    st.rerun()
 
-        if sessions:
-            st.markdown(f"### 📁 Sessions ({len(sessions)})")
+            # Search
+            search_query = sanitize_user_input(st.text_input("🔍 Search sessions", key="search_input"))
 
-            with st.container(height=435, border=True):
-                for session in sessions:
-                    session_id = session.get("id")
-                    is_current = session_id == st.session_state.current_session_id
-                    button_type = "primary" if is_current else "secondary"
-                    if st.button(
-                        f"💬 {session['session_name']}",
-                        key=f"session_{session_id}",
-                        use_container_width=True,
-                        type=button_type,
-                    ):
-                        st.session_state.current_session_id = session_id
-                        db_messages = db.get_session_messages(session_id)
-                        st.session_state.messages = [
-                            {"role": "system", "content": "Assistant configured."}
-                        ] + [
-                            {"role": msg["role"], "content": msg["content"]}
-                            for msg in db_messages
-                        ]
-                        st.session_state.token_total = recompute_token_total(st.session_state.messages)
-                        st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
-                        st.rerun()
+            # Filter sessions
+            sessions = db.search_sessions(st.session_state.user_id, search_query)
+
+            if sessions:
+                st.markdown(f"### 📁 Sessions ({len(sessions)})")
+
+                with st.container(height=435, border=True):
+                    for session in sessions:
+                        session_id = session.get("id")
+                        is_current = session_id == st.session_state.current_session_id
+                        button_type = "primary" if is_current else "secondary"
+                        if st.button(
+                            f"💬 {session['session_name']}",
+                            key=f"session_{session_id}",
+                            use_container_width=True,
+                            type=button_type,
+                        ):
+                            st.session_state.current_session_id = session_id
+                            db_messages = db.get_session_messages(session_id)
+                            st.session_state.messages = [
+                                {"role": "system", "content": "Assistant configured."}
+                            ] + [
+                                {"role": msg["role"], "content": msg["content"]}
+                                for msg in db_messages
+                            ]
+                            st.session_state.token_total = recompute_token_total(st.session_state.messages)
+                            st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
+                            st.rerun()
+            else:
+                st.info("No sessions found")
         else:
-            st.info("No sessions found")
+            # Show disabled buttons when processing
+            st.button("🚪 Logout", use_container_width=True, disabled=True)
+            st.button("🏠 Dashboard", use_container_width=True, disabled=True)
+            st.button("➕ New Chat", use_container_width=True, type="primary", disabled=True)
+            st.text_input("🔍 Search sessions", key="search_input_disabled", disabled=True)
+
+            # Render sessions list with disabled buttons
+            sessions = db.get_user_sessions(st.session_state.user_id)
+            if sessions:
+                st.markdown(f"### 📁 Sessions ({len(sessions)})")
+                with st.container(height=435, border=True):
+                    for session in sessions:
+                        session_id = session.get("id")
+                        is_current = session_id == st.session_state.current_session_id
+                        button_type = "primary" if is_current else "secondary"
+                        st.button(
+                            f"💬 {session['session_name']}",
+                            key=f"session_{session_id}_disabled",
+                            use_container_width=True,
+                            type=button_type,
+                            disabled=True,
+                        )
+            else:
+                st.info("No sessions found")
 
     # Main Chat Area
     if st.session_state.current_session_id:
@@ -317,43 +326,48 @@ else:
                 st.metric("Messages", msg_count)
 
             with col3:
-                options_prefix = f"session_options_{current_session['id']}"
-                rename_key = f"{options_prefix}_rename"
-                with st.popover("✏️ Options", use_container_width=True):
-                    default_name = current_session["session_name"]
-                    rename_value = st.text_input(
-                        "Rename session",
-                        value=default_name,
-                        key=rename_key,
-                    )
-                    if st.button("Save name", key=f"{options_prefix}_rename_save", use_container_width=True):
-                        final_name = (rename_value or default_name).strip()
-                        if final_name != default_name:
-                            db.rename_session(st.session_state.current_session_id, final_name)
-                        st.rerun()
+                # Only show Options popover when NOT processing
+                if not st.session_state.is_processing:
+                    options_prefix = f"session_options_{current_session['id']}"
+                    rename_key = f"{options_prefix}_rename"
+                    with st.popover("✏️ Options", use_container_width=True):
+                        default_name = current_session["session_name"]
+                        rename_value = st.text_input(
+                            "Rename session",
+                            value=default_name,
+                            key=rename_key,
+                        )
+                        if st.button("Save name", key=f"{options_prefix}_rename_save", use_container_width=True):
+                            final_name = sanitize_user_input((rename_value or default_name).strip())
+                            if final_name != default_name:
+                                db.rename_session(st.session_state.current_session_id, final_name)
+                            st.rerun()
 
-                    st.divider()
+                        st.divider()
 
-                    export_json = db.export_session_json(
-                        st.session_state.user_id,
-                        st.session_state.current_session_id,
-                    )
-                    st.download_button(
-                        "⬇️ Export",
-                        data=export_json,
-                        file_name=f"{current_session['session_name']}.json",
-                        mime="application/json",
-                        use_container_width=True,
-                        key=f"{options_prefix}_export",
-                    )
+                        export_json = db.export_session_json(
+                            st.session_state.user_id,
+                            st.session_state.current_session_id,
+                        )
+                        st.download_button(
+                            "⬇️ Export",
+                            data=export_json,
+                            file_name=f"{current_session['session_name']}.json",
+                            mime="application/json",
+                            use_container_width=True,
+                            key=f"{options_prefix}_export",
+                        )
 
-                    if st.button("🗑️ Delete session", key=f"{options_prefix}_delete", use_container_width=True):
-                        db.delete_session(st.session_state.current_session_id)
-                        st.session_state.current_session_id = None
-                        st.session_state.messages = []
-                        st.session_state.token_total = 0
-                        st.session_state.limit_reached = False
-                        st.rerun()
+                        if st.button("🗑️ Delete session", key=f"{options_prefix}_delete", use_container_width=True):
+                            db.delete_session(st.session_state.current_session_id)
+                            st.session_state.current_session_id = None
+                            st.session_state.messages = []
+                            st.session_state.token_total = 0
+                            st.session_state.limit_reached = False
+                            st.rerun()
+                else:
+                    # Show disabled button when processing
+                    st.button("✏️ Options", use_container_width=True, disabled=True)
 
             # Demo queries button for demo users
             if col4 is not None:
@@ -436,21 +450,25 @@ else:
                     st.session_state.pending_email or
                     st.session_state.pending_meeting
                 )
-                if is_regular_query and st.button("🔄 Regenerate Last Response", key="regen_button"):
-                    st.session_state.messages.pop()
-                    st.session_state.pending_regen = True
-                    st.rerun()
+                if is_regular_query:
+                    if not st.session_state.is_processing:
+                        if st.button("🔄 Regenerate Last Response", key="regen_button"):
+                            st.session_state.messages.pop()
+                            st.session_state.pending_regen = True
+                            st.rerun()
+                    else:
+                        st.button("🔄 Regenerate Last Response", key="regen_button", disabled=True)
 
-            # Render assistants
-            if st.session_state.show_tool_picker:
+            # Render assistants (don't render when processing to prevent graying out)
+            if st.session_state.show_tool_picker and not st.session_state.is_processing:
                 with st.chat_message("assistant"):
                     render_tool_picker()
 
-            if st.session_state.show_email_builder:
+            if st.session_state.show_email_builder and not st.session_state.is_processing:
                 with st.chat_message("assistant"):
                     render_email_builder(mcp_client, db)
 
-            if st.session_state.show_meeting_builder:
+            if st.session_state.show_meeting_builder and not st.session_state.is_processing:
                 with st.chat_message("assistant"):
                     render_meeting_builder(mcp_client, db)
 
@@ -464,312 +482,333 @@ else:
             or st.session_state.show_meeting_builder
         )
         tool_button_label = "×" if any_assistant_open else "＋"
-        user_input = None
-        toggle_col, input_col = st.columns([0.03, 0.97], gap=None)
+        toggle_col, input_col = st.columns([0.03, 0.97], gap=None)  # No gap in columns
 
+        # Block interactions by not rendering interactive elements when processing
         with toggle_col:
-            if st.button(
-                tool_button_label,
-                key="chat_tool_toggle",
-                help="Close Bulls assistants" if any_assistant_open else "Open Bulls assistants",
-                use_container_width=True,
-            ):
-                # Close everything if anything is open, otherwise open tool picker
-                if any_assistant_open:
-                    # Close all
-                    st.session_state.show_tool_picker = False
-                    st.session_state.show_email_builder = False
-                    st.session_state.show_meeting_builder = False
-                else:
-                    # Open tool picker
-                    st.session_state.show_tool_picker = True
-
-                st.rerun()
+            if not st.session_state.is_processing:
+                if st.button(
+                    tool_button_label,
+                    key="chat_tool_toggle",
+                    help="Close Bulls assistants" if any_assistant_open else "Open Bulls assistants",
+                    use_container_width=True,
+                ):
+                    # Close everything if anything is open, otherwise open tool picker
+                    if any_assistant_open:
+                        # Close all
+                        st.session_state.show_tool_picker = False
+                        st.session_state.show_email_builder = False
+                        st.session_state.show_meeting_builder = False
+                    else:
+                        # Open tool picker
+                        st.session_state.show_tool_picker = True
+                    st.rerun()
+            else:
+                # Show disabled button when processing - custom HTML to match original styling
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color: #f0f2f6;
+                        border: 1px solid #dfe1e6;
+                        border-radius: 0.5rem;
+                        padding: 0.5rem;
+                        text-align: center;
+                        color: #a0a0a0;
+                        cursor: not-allowed;
+                        height: 38px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                    ">{tool_button_label}</div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
         with input_col:
+            user_input = None
             if st.session_state.limit_reached:
                 st.warning(
                     f"Session token budget reached "
                     f"({st.session_state.token_total}/{SESSION_TOKEN_LIMIT}). "
                     "Please open a new session to continue."
                 )
-                user_input = None
             elif st.session_state.is_processing:
-                # Show transparent overlay to prevent input while still showing the chat input
+                # Show disabled text input when processing - custom HTML to match original styling
                 st.markdown(
                     """
                     <div style="
-                        background-color: transparent;
-                        border: none;
-                        border-radius: 0.5rem;
-                        padding: 0.75rem 1rem;
-                        height: 3rem;
+                        background-color: #f8f9fa;
+                        border: 1px solid #dfe1e6;
+                        border-radius: 1.5rem;
+                        padding: 0.5rem 1rem;
+                        height: 38px;
+                        color: #a0a0a0;
+                        cursor: not-allowed;
+                        font-family: 'Source Sans Pro', sans-serif;
                         display: flex;
                         align-items: center;
-                        justify-content: center;
-                        pointer-events: none;
-                    ">
-                    </div>
+                        box-sizing: border-box;
+                        margin-left: 0.5rem;
+                    ">Ask the USF Campus Concierge...</div>
                     """,
                     unsafe_allow_html=True
                 )
-                user_input = None
             else:
+                # Only render interactive chat input when NOT processing
                 user_input = st.chat_input("Ask the USF Campus Concierge...")
 
-            # Handle regeneration
-            if st.session_state.pending_regen and st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
-                if not st.session_state.is_processing:
-                    # First time - set processing and rerun to disable input
-                    st.session_state.is_processing = True
-                    st.rerun()
-                else:
-                    # Already processing - execute regeneration
-                    last_user = st.session_state.messages[-1]["content"]
-                    regen_id = hash(("regen", last_user))
-
-                    # Check if we've already started this regeneration
-                    if st.session_state.get("processing_regen_id") != regen_id:
-                        # First time processing this regeneration
-                        st.session_state.processing_regen_id = regen_id
-
-                    with chat_col:
-                        # Show thinking indicator
-                        with st.chat_message("assistant"):
-                            thinking_placeholder = st.empty()
-                            thinking_placeholder.markdown("Thinking...")
-
-                            streamer = SmoothStreamer(thinking_placeholder)
-                            final_text = None
-                            matched_chunks = []
-                            last_chunk = ""
-
-                            for kind, payload in generate_with_rag(last_user, mcp_client=mcp_client):
-                                text = payload.get("text", "")
-                                if not text:
-                                    continue
-                                last_chunk = text
-                                streamer.update(text)
-                                if kind != "delta":
-                                    final_text = text
-                                    matched_chunks = payload.get("hits", [])
-
-                            streamer.finalize(final_text or last_chunk)
-
-                    if final_text is None:
-                        final_text = last_chunk
-
-                    out_toks = estimate_tokens(final_text or "")
-                    st.session_state.token_total += out_toks
-                    st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
-                    st.session_state.messages.append({"role": "assistant", "content": final_text})
-                    db.add_message(
-                        st.session_state.current_session_id,
-                        "assistant",
-                        final_text,
-                        tokens_out=out_toks,
-                    )
-                    mcp_client.log_interaction(
-                        st.session_state.current_session_id,
-                        "assistant_regen",
-                        {"query": last_user, "response": final_text, "chunks": matched_chunks},
-                    )
-                    maybe_auto_open_assistant(final_text)
-                    st.session_state.pending_regen = False
-                    st.session_state.processing_regen_id = None
-                    st.session_state.is_processing = False
-                    st.rerun()
-
-        # Handle user input
-        if user_input:
-            # Ignore input if already processing to prevent duplicates
-            if st.session_state.is_processing:
-                st.rerun()
-            else:
-                # Store input and set processing state, then rerun to disable input
-                st.session_state.pending_user_input = user_input
+        # Handle regeneration request - TWO PHASE APPROACH
+        # Phase 1: Button clicked → set flag and rerun (UI updates instantly)
+        if st.session_state.pending_regen and not st.session_state.is_processing:
+            if st.session_state.messages and st.session_state.messages[-1]["role"] == "user":
                 st.session_state.is_processing = True
-                st.rerun()
+                st.rerun()  # Critical: rerun NOW to update UI before processing
 
-        # Process pending user input
-        if st.session_state.is_processing and st.session_state.pending_user_input:
-            # Generate a unique ID for this input to prevent duplicate processing
-            current_input = st.session_state.pending_user_input
-            input_id = hash(current_input)
+        # Phase 2: Process regeneration (UI already showing disabled state)
+        if st.session_state.is_processing and st.session_state.pending_regen:
+            handle_pending_action_collapses()
 
-            # Check if we've already started processing this input
-            if st.session_state.get("processing_input_id") == input_id:
-                # Already processing this input - rerun interrupted us, so continue
-                clean = st.session_state.get("processing_query", "")
-                if not clean:
-                    # Safety: shouldn't happen, but if it does, clear and restart
-                    st.session_state.pending_user_input = None
-                    st.session_state.processing_input_id = None
-                    st.session_state.processing_query = None
-                    st.session_state.processing_tokens_in = None
-                    st.session_state.processing_cached_result = None
-                    st.session_state.processing_response_saved = False
-                    st.session_state.is_processing = False
-                    st.rerun()
-                # Messages already added and displayed from history
-                # Just create the thinking indicator - don't duplicate the user message
-                in_toks = st.session_state.get("processing_tokens_in", 0)
-                with chat_col:
-                    # User message already displayed from history, so only show thinking indicator
-                    with st.chat_message("assistant"):
-                        thinking_placeholder = st.empty()
-                        thinking_placeholder.markdown("Thinking...")
-            else:
-                # First time processing this input
-                handle_pending_action_collapses()
-                clean = sanitize_user_input(current_input)
-                st.session_state.processing_input_id = input_id
-                st.session_state.processing_query = clean
+            clean = st.session_state.messages[-1]["content"]
+            in_toks = estimate_tokens(clean)
 
-                in_toks = estimate_tokens(clean)
-                st.session_state.processing_tokens_in = in_toks
-                st.session_state.messages.append({"role": "user", "content": clean})
-                db.add_message(
-                    st.session_state.current_session_id,
-                    "user",
-                    clean,
-                    tokens_in=in_toks,
-                )
-
-                with chat_col:
-                    with st.chat_message("user"):
-                        st.write(clean)
-
-                    # Show thinking indicator
-                    with st.chat_message("assistant"):
-                        thinking_placeholder = st.empty()
-                        thinking_placeholder.markdown("Thinking...")
+            with chat_col:
+                with st.chat_message("assistant"):
+                    thinking_placeholder = st.empty()
+                    thinking_placeholder.markdown("Thinking...")
 
             # Check for injection
             if is_injection(clean):
                 warn = "That looks like a prompt-injection attempt. For safety, I can't run that. Try a normal question."
                 thinking_placeholder.markdown(warn)
-
                 out_toks = estimate_tokens(warn)
                 st.session_state.token_total += (in_toks + out_toks)
                 st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
                 st.session_state.messages.append({"role": "assistant", "content": warn})
-                db.add_message(
-                    st.session_state.current_session_id,
-                    "assistant",
-                    warn,
-                    tokens_out=out_toks,
-                )
-                mcp_client.log_interaction(
-                    st.session_state.current_session_id,
-                    "injection_blocked",
-                    {"prompt": clean, "response": warn},
-                )
-                st.session_state.pending_user_input = None
-                st.session_state.processing_input_id = None
-                st.session_state.processing_query = None
-                st.session_state.processing_tokens_in = None
-                st.session_state.processing_cached_result = None
-                st.session_state.processing_response_saved = False
-                st.session_state.is_processing = False
-                st.rerun()
-
-            # Generate response with RAG (or use cached result)
-            cached_result = st.session_state.get("processing_cached_result")
-            response_already_saved = st.session_state.get("processing_response_saved", False)
-
-            if cached_result and cached_result.get("input_id") == st.session_state.processing_input_id:
-                # Use cached result from previous completed run
-                final_text = cached_result.get("text")
-                matched_chunks = cached_result.get("chunks", [])
-                thinking_placeholder.markdown(final_text)
+                db.add_message(st.session_state.current_session_id, "assistant", warn, tokens_out=out_toks)
+                mcp_client.log_interaction(st.session_state.current_session_id, "injection_blocked", {"prompt": clean, "response": warn})
             else:
-                # Generate new result
-                streamer = SmoothStreamer(thinking_placeholder)
-                final_text = None
-                matched_chunks = []
-                last_chunk = ""
+                # Generate new response
+                try:
+                    streamer = SmoothStreamer(thinking_placeholder)
+                    final_text = None
+                    matched_chunks = []
+                    last_chunk = ""
 
-                for kind, payload in generate_with_rag(clean, mcp_client=mcp_client):
-                    text = payload.get("text", "")
-                    if not text:
-                        continue
-                    last_chunk = text
-                    streamer.update(text)
-                    if kind != "delta":
-                        final_text = text
-                        matched_chunks = payload.get("hits", [])
+                    for kind, payload in generate_with_rag(clean, mcp_client=mcp_client):
+                        text = payload.get("text", "")
+                        if not text:
+                            continue
+                        last_chunk = text
+                        streamer.update(text)
+                        if kind != "delta":
+                            final_text = text
+                            matched_chunks = payload.get("hits", [])
 
-                streamer.finalize(final_text or last_chunk)
+                    streamer.finalize(final_text or last_chunk)
+                    if final_text is None:
+                        final_text = last_chunk
 
-                if final_text is None:
-                    final_text = last_chunk
+                    if final_text:
+                        out_toks = estimate_tokens(final_text)
+                        st.session_state.token_total += (in_toks + out_toks)
+                        st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
+                        st.session_state.messages.append({"role": "assistant", "content": final_text})
+                        db.add_message(st.session_state.current_session_id, "assistant", final_text, tokens_out=out_toks)
+                        mcp_client.log_interaction(
+                            st.session_state.current_session_id,
+                            "regenerate_response",
+                            {"prompt": clean, "response": final_text, "chunks": matched_chunks, "tokens_in": in_toks, "tokens_out": out_toks}
+                        )
+                        maybe_auto_open_assistant(final_text)
+                    else:
+                        error_msg = "We weren't able to generate a response. Please try again."
+                        thinking_placeholder.markdown(error_msg)
+                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                        db.add_message(st.session_state.current_session_id, "assistant", error_msg, tokens_out=estimate_tokens(error_msg))
+                        mcp_client.log_interaction(st.session_state.current_session_id, "assistant_error", {"prompt": clean, "error": "empty_response"})
+                except RuntimeError as e:
+                    # Catch content filter blocks and other Azure errors
+                    error_msg = str(e)
+                    thinking_placeholder.markdown(error_msg)
+                    out_toks = estimate_tokens(error_msg)
+                    st.session_state.token_total += (in_toks + out_toks)
+                    st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
+                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                    db.add_message(st.session_state.current_session_id, "assistant", error_msg, tokens_out=out_toks)
+                    mcp_client.log_interaction(st.session_state.current_session_id, "content_filter_block", {"prompt": clean, "error": error_msg})
 
-                # Cache the result to prevent recomputation on future reruns
-                if final_text:
-                    st.session_state.processing_cached_result = {
-                        "input_id": st.session_state.processing_input_id,
-                        "text": final_text,
-                        "chunks": matched_chunks,
-                    }
+            # Clear regeneration state
+            st.session_state.pending_regen = False
+            st.session_state.is_processing = False
+            st.rerun()
 
-            if final_text is None:
-                error_msg = "We weren't able to generate a response. Please try again."
-                thinking_placeholder.markdown(error_msg)
-                mcp_client.log_interaction(
-                    st.session_state.current_session_id,
-                    "assistant_error",
-                    {"prompt": clean, "error": "empty_response"},
-                )
-                st.session_state.messages.append({"role": "assistant", "content": error_msg})
-                db.add_message(
-                    st.session_state.current_session_id,
-                    "assistant",
-                    error_msg,
-                    tokens_out=estimate_tokens(error_msg),
-                )
-                st.session_state.pending_user_input = None
-                st.session_state.processing_input_id = None
-                st.session_state.processing_query = None
-                st.session_state.processing_tokens_in = None
-                st.session_state.processing_cached_result = None
-                st.session_state.processing_response_saved = False
-                st.session_state.is_processing = False
-                st.rerun()
+        # Handle email draft generation - TWO PHASE APPROACH
+        # Phase 2: Process the pending email draft
+        if st.session_state.is_processing and st.session_state.get("pending_email_draft"):
+            from agents.email_assistant import start_email_draft
+            params = st.session_state.pending_email_draft
 
-            # Only save response if we haven't already saved it
-            # This prevents duplicates when reruns occur after response generation
-            if not response_already_saved:
-                out_toks = estimate_tokens(final_text or "")
+            with chat_col:
+                with st.chat_message("assistant"):
+                    st.markdown(f"✉️ Drafting reply to **{params['to']}** ...")
+
+            start_email_draft(mcp_client, db, params["to"], params["subject"], params["message"])
+            st.session_state.pending_email_draft = None
+            st.session_state.is_processing = False
+            st.session_state.show_email_builder = True  # Reopen assistant after processing
+            st.rerun()
+
+        # Handle email AI edit - TWO PHASE APPROACH
+        # Phase 2: Process the pending email edit
+        if st.session_state.is_processing and st.session_state.get("pending_email_edit"):
+            from agents.email_assistant import apply_email_edit
+            params = st.session_state.pending_email_edit
+
+            with chat_col:
+                with st.chat_message("assistant"):
+                    st.markdown("✏️ Updating the email draft …")
+
+            apply_email_edit(mcp_client, db, params["instructions"])
+            st.session_state.pending_email_edit = None
+            st.session_state.is_processing = False
+            st.session_state.show_email_builder = True  # Reopen assistant after processing
+            st.rerun()
+
+        # Handle meeting planning - TWO PHASE APPROACH
+        # Phase 2: Process the pending meeting plan
+        if st.session_state.is_processing and st.session_state.get("pending_meeting_plan"):
+            from agents.meeting_assistant import plan_meeting
+
+            with chat_col:
+                with st.chat_message("assistant"):
+                    st.markdown("📅 Generating meeting plan...")
+
+            params = st.session_state.pending_meeting_plan
+            plan_meeting(
+                mcp_client, db,
+                params["summary"],
+                params["start_iso"],
+                params["duration"],
+                params["attendees"],
+                params["description"],
+                params["location"],
+            )
+            st.session_state.pending_meeting_plan = None
+            st.session_state.is_processing = False
+            st.session_state.show_meeting_builder = True  # Reopen assistant after processing
+            st.rerun()
+
+        # Handle meeting AI edit - TWO PHASE APPROACH
+        # Phase 2: Process the pending meeting edit
+        if st.session_state.is_processing and st.session_state.get("pending_meeting_edit"):
+            from agents.meeting_assistant import apply_meeting_edit
+            params = st.session_state.pending_meeting_edit
+
+            with chat_col:
+                with st.chat_message("assistant"):
+                    st.markdown("✏️ Updating meeting notes …")
+
+            apply_meeting_edit(mcp_client, db, params["instructions"])
+            st.session_state.pending_meeting_edit = None
+            st.session_state.is_processing = False
+            st.session_state.show_meeting_builder = True  # Reopen assistant after processing
+            st.rerun()
+
+        # Handle user input - TWO PHASE APPROACH
+        # Phase 1: User submits → set flag and rerun (UI updates instantly)
+        if user_input and not st.session_state.is_processing:
+            st.session_state.pending_user_input = user_input
+            st.session_state.is_processing = True
+            # Close all assistants and clear pending data when regular prompt is sent
+            st.session_state.show_tool_picker = False
+            st.session_state.show_email_builder = False
+            st.session_state.show_meeting_builder = False
+            st.session_state.pending_email = None
+            st.session_state.pending_meeting = None
+            st.rerun()  # Critical: rerun NOW to update UI before processing
+
+        # Phase 2: Process the pending input (UI already showing disabled state)
+        if st.session_state.is_processing and st.session_state.get("pending_user_input"):
+            handle_pending_action_collapses()
+
+            clean = sanitize_user_input(st.session_state.pending_user_input)
+            in_toks = estimate_tokens(clean)
+
+            # Add user message
+            st.session_state.messages.append({"role": "user", "content": clean})
+            db.add_message(st.session_state.current_session_id, "user", clean, tokens_in=in_toks)
+
+            with chat_col:
+                with st.chat_message("user"):
+                    st.write(clean)
+
+                with st.chat_message("assistant"):
+                    thinking_placeholder = st.empty()
+                    thinking_placeholder.markdown("Thinking...")
+
+            # Check for injection
+            if is_injection(clean):
+                warn = "That looks like a prompt-injection attempt. For safety, I can't run that. Try a normal question."
+                thinking_placeholder.markdown(warn)
+                out_toks = estimate_tokens(warn)
                 st.session_state.token_total += (in_toks + out_toks)
                 st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
-                st.session_state.messages.append({"role": "assistant", "content": final_text})
-                db.add_message(
-                    st.session_state.current_session_id,
-                    "assistant",
-                    final_text,
-                    tokens_out=out_toks,
-                )
-                mcp_client.log_interaction(
-                    st.session_state.current_session_id,
-                    "assistant_reply",
-                    {
-                        "prompt": clean,
-                        "response": final_text,
-                        "chunks": matched_chunks,
-                        "tokens_in": in_toks,
-                        "tokens_out": out_toks,
-                    },
-                )
-                maybe_auto_open_assistant(final_text)
-                # Mark response as saved to prevent duplicate saves on future reruns
-                st.session_state.processing_response_saved = True
+                st.session_state.messages.append({"role": "assistant", "content": warn})
+                db.add_message(st.session_state.current_session_id, "assistant", warn, tokens_out=out_toks)
+                mcp_client.log_interaction(st.session_state.current_session_id, "injection_blocked", {"prompt": clean, "response": warn})
+            else:
+                # Generate response with RAG
+                try:
+                    streamer = SmoothStreamer(thinking_placeholder)
+                    final_text = None
+                    matched_chunks = []
+                    last_chunk = ""
+
+                    for kind, payload in generate_with_rag(clean, mcp_client=mcp_client):
+                        text = payload.get("text", "")
+                        if not text:
+                            continue
+                        last_chunk = text
+                        streamer.update(text)
+                        if kind != "delta":
+                            final_text = text
+                            matched_chunks = payload.get("hits", [])
+
+                    streamer.finalize(final_text or last_chunk)
+                    if final_text is None:
+                        final_text = last_chunk
+
+                    if final_text:
+                        out_toks = estimate_tokens(final_text)
+                        st.session_state.token_total += (in_toks + out_toks)
+                        st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
+                        st.session_state.messages.append({"role": "assistant", "content": final_text})
+                        db.add_message(st.session_state.current_session_id, "assistant", final_text, tokens_out=out_toks)
+                        mcp_client.log_interaction(
+                            st.session_state.current_session_id,
+                            "assistant_reply",
+                            {"prompt": clean, "response": final_text, "chunks": matched_chunks, "tokens_in": in_toks, "tokens_out": out_toks}
+                        )
+                        maybe_auto_open_assistant(final_text)
+                    else:
+                        error_msg = "We weren't able to generate a response. Please try again."
+                        thinking_placeholder.markdown(error_msg)
+                        st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                        db.add_message(st.session_state.current_session_id, "assistant", error_msg, tokens_out=estimate_tokens(error_msg))
+                        mcp_client.log_interaction(st.session_state.current_session_id, "assistant_error", {"prompt": clean, "error": "empty_response"})
+                except RuntimeError as e:
+                    # Catch content filter blocks and other Azure errors
+                    error_msg = str(e)
+                    thinking_placeholder.markdown(error_msg)
+                    out_toks = estimate_tokens(error_msg)
+                    st.session_state.token_total += (in_toks + out_toks)
+                    st.session_state.limit_reached = st.session_state.token_total >= SESSION_TOKEN_LIMIT
+                    st.session_state.messages.append({"role": "assistant", "content": error_msg})
+                    db.add_message(st.session_state.current_session_id, "assistant", error_msg, tokens_out=out_toks)
+                    mcp_client.log_interaction(st.session_state.current_session_id, "content_filter_block", {"prompt": clean, "error": error_msg})
 
             # Clear processing state
             st.session_state.pending_user_input = None
-            st.session_state.processing_input_id = None
-            st.session_state.processing_query = None
-            st.session_state.processing_response_saved = False
             st.session_state.is_processing = False
             st.rerun()
 

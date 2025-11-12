@@ -51,11 +51,8 @@ def start_email_draft(mcp_client, db, to_addr: str, subject: str, student_msg: s
 
     in_toks = estimate_tokens(student_msg)
 
-    # Show drafting message
-    with st.chat_message("assistant"):
-        st.markdown(f"✉️ Drafting reply to **{to_addr}** ...")
-
     # Draft email without showing in chat history
+    # Note: Drafting message will be shown by caller in chat_col
     drafted = draft_email_via_mcp(
         mcp_client,
         db,
@@ -91,7 +88,7 @@ def start_email_draft(mcp_client, db, to_addr: str, subject: str, student_msg: s
         "student_msg": student_msg,
     }
     st.session_state.email_draft_sync_value = cleaned_draft
-    st.session_state.show_email_builder = True
+    # Don't set show_email_builder here - let the handler manage it after processing
 
 
 def apply_email_edit(mcp_client, db, instructions: str) -> None:
@@ -106,11 +103,8 @@ def apply_email_edit(mcp_client, db, instructions: str) -> None:
         st.warning("Enter edit instructions before applying an AI edit.")
         return
 
-    # Show updating message
-    with st.chat_message("assistant"):
-        st.markdown("✏️ Updating the email draft …")
-
     # Update email draft without showing in chat history
+    # Note: Updating message will be shown by caller in chat_col
     drafted = draft_email_via_mcp(
         mcp_client,
         db,
@@ -147,7 +141,7 @@ def apply_email_edit(mcp_client, db, instructions: str) -> None:
     pending["body"] = revised
     st.session_state.pending_email = pending
     st.session_state.email_draft_sync_value = revised
-    st.session_state.show_email_builder = True
+    # Don't set show_email_builder here - let the handler manage it after processing
 
 
 def save_manual_email_edit(text: str) -> bool:
