@@ -14,12 +14,11 @@ def show_observability_dashboard():
         st.markdown("*USF Concierge - Production Monitoring*")
 
         st.info("""
-        **Demo Dashboard:** This dashboard demonstrates production-grade observability infrastructure.
-        In a live environment, these metrics would be queried from Splunk HEC in real-time.
+        **Demo Dashboard:** Provides a glimpse at a Splunk dashboard. The numbers are sample data, but the layout mirrors what’s wired up through the Splunk logger.
         """)
 
         # Metrics row
-        st.subheader("System Health Metrics")
+        st.subheader("System Health Pulse")
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
@@ -66,7 +65,7 @@ def show_observability_dashboard():
 
         with col1:
             st.subheader("Request Volume Over Time")
-            st.caption("Request + regenerate events emitted from app.py")
+            st.caption("Every question and regenerate request flowing through the app")
 
             df_requests = pd.DataFrame({
                 'Time': dates,
@@ -76,7 +75,7 @@ def show_observability_dashboard():
 
         with col2:
             st.subheader("RAG Retrieval Quality")
-            st.caption("Average rerank score from utils.rag pipeline")
+            st.caption("How confident the reranker feels about the retrieved chunks")
 
             df_quality = pd.DataFrame({
                 'Time': dates,
@@ -89,7 +88,7 @@ def show_observability_dashboard():
 
         with col1:
             st.subheader("Response Latency Percentiles")
-            st.caption("P50 / P95 request latency derived from Splunk request events")
+            st.caption("Median vs. tail latency for the end‑to‑end response time")
 
             df_latency = pd.DataFrame({
                 'Time': dates,
@@ -100,7 +99,7 @@ def show_observability_dashboard():
 
         with col2:
             st.subheader("Database Query Performance")
-            st.caption("Supabase operations instrumented in utils.database")
+            st.caption("Supabase reads/writes measured inside the database client")
 
             df_db = pd.DataFrame({
                 'Time': dates,
@@ -112,7 +111,7 @@ def show_observability_dashboard():
 
         # Event category breakdown
         st.subheader("Event Distribution by Category")
-        st.caption("Request, RAG, LLM, API, MCP, Database, Security, and Agent streams")
+        st.caption("What the Splunk logger is actually capturing")
 
         col1, col2 = st.columns([2, 1])
 
@@ -126,14 +125,14 @@ def show_observability_dashboard():
         with col2:
             st.markdown("**Event Categories**")
             st.markdown("""
-            **Request** – app.py request_start / request_complete / request_error events  
-            **RAG** – Retrieval, rerank, neighbor fetch, pipeline complete events from utils.rag  
-            **LLM** – Azure Phi-4 streaming + completion metrics (tokens, latency)  
-            **API** – Gmail, Calendar, Hugging Face calls logged via tools/google_tools.py and utils/rag.py  
-            **Database** – Supabase session/message CRUD operations from utils.database  
-            **MCP** – client + server tool call telemetry in agents/mcp.py  
-            **Security** – sanitize/injection logs from utils.security and content filter trips in utils.azure_llm.py  
-            **Agent** – UI interactions from components/assistants (email/meeting assistants)
+            **Request** – every question, regenerate, or error captured in `app.py`  
+            **RAG** – the retrieval journey: search, rerank, neighbor fetch, pipeline complete  
+            **LLM** – token usage and latency for the Azure Phi-4 calls  
+            **API** – Gmail, Calendar, and Hugging Face calls plus their metadata  
+            **Database** – Supabase reads/writes (sessions, messages, audit logs)  
+            **MCP** – tool calls routed through the MCP server/client  
+            **Security** – sanitization, injection checks, content-filter blocks  
+            **Agent** – email/meeting assistant clicks inside the Streamlit UI
             """)
 
         st.divider()
@@ -153,11 +152,11 @@ def show_observability_dashboard():
                     "Fallback / Resilience"
                 ],
                 "Status": [
-                    "utils.splunk_logger.SplunkLogger (async queue, timed context helper)",
-                    "Splunk HEC (HTTPS + retry + TLS disable opt for Cloud trial)",
-                    "app.py, utils/rag.py, utils/azure_llm.py, utils/database.py, utils/security.py, tools/google_tools.py, agents/mcp.py, components/assistants.py",
-                    "Request, RAG, LLM, API, Database, MCP, Security, Agent UI",
-                    "Batch flush (10 events / 5s), fallback to logs/splunk_fallback.log on failure"
+                    "The shared Splunk logger handles batching + timing and feeds every module data safely",
+                    "Events stream into Splunk’s HTTP collector (with retries and a fallback file) ",
+                    "From chat orchestration to Google tools, every layer calls the same logging helper",
+                    "We treat requests, RAG, LLMs, APIs, database ops, MCP I/O, security, and UI actions as first-class data sources",
+                    "If HEC is unreachable we drop into a local log so nothing silently disappears"
                 ]
             }
             df_impl = pd.DataFrame(impl_data)
@@ -172,7 +171,7 @@ def show_observability_dashboard():
             )
 
         with col2:
-            st.markdown("**Performance Optimizations**")
+            st.markdown("**What We Watch For**")
             perf_data = {
                 "Optimization": [
                     "Session/Message Cache",
@@ -182,12 +181,12 @@ def show_observability_dashboard():
                     "API Metadata"
                 ],
                 "Impact": [
-                    "2s TTL caches cut duplicate Supabase reads",
-                    "LRU cache (100 entries) avoids duplicate cross-encoder work",
-                    "Single Supabase query fetches neighbor chunks instead of N round trips",
-                    "Client + server instrumentation exposes per-tool latency + success",
-                    "Each Gmail/Calendar call logs recipient, status, duration for audit"
-                ]
+                      "Warm caches keep Supabase quiet between chat polls",
+                      "The reranker stays fast by skipping repeat query/doc pairs",
+                      "Neighbor lookups run as one bundled query instead of dozens",
+                      "Every MCP tool call is timed and labeled so slow tools stand out",
+                      "API logs capture recipient, status, and duration for clear audit trails"
+                  ]
             }
             df_perf = pd.DataFrame(perf_data)
             st.dataframe(
