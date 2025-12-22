@@ -2,7 +2,7 @@ name: keep-streamlit-supabase-alive
 
 on:
   schedule:
-    - cron: '0 */2 * * *'
+    - cron: '0 * * * *'
   workflow_dispatch:
 
 jobs:
@@ -17,7 +17,7 @@ jobs:
             echo "STREAMLIT_APP_URL secret is not set" >&2
             exit 1
           fi
-          curl -fsSL "$STREAMLIT_APP_URL" >/dev/null
+          curl -fsS "$STREAMLIT_APP_URL" >/dev/null
 
   ping-supabase:
     runs-on: ubuntu-latest
