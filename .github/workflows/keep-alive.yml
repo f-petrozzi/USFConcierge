@@ -17,7 +17,7 @@ jobs:
             echo "STREAMLIT_APP_URL secret is not set" >&2
             exit 1
           fi
-          curl -fsS "$STREAMLIT_APP_URL" >/dev/null
+          curl -fsSL "$STREAMLIT_APP_URL" >/dev/null
 
   ping-supabase:
     runs-on: ubuntu-latest
